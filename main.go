@@ -7,124 +7,156 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"errors"
 
 	"github.com/joho/godotenv"
 )
-
-type response struct {
-	Count int
-	PatentFileWrapperDataBag []patentFileWrapperDataBag
-	RequestIdentifier string
-}
-
-type patentFileWrapperDataBag struct {
-	ApplicationNumberText string
-	PgpubDocumentMetaData documentMetadata
-}
-
-type documentMetadata struct {
-	FileCreateDateTime string
-	FileLocationURI string
-	ProductIdentifier string
-}
 
 const (
 	baseUrlUspto = "https://api.uspto.gov/api/v1/patent/applications/"
 	downloadUrlUspto = "https://api.uspto.gov/api/v1/download/applications/"
 )
 
-func main() {
+var (
+	errUnsuccessfulStatusCode = errors.New("Response returned with unsuccessful status code")
+	errIncorrectPatentReturned = errors.New("Api returned a patent with application number not matching the request")
+	apiKeyUspto string
+)
+
+type response struct {
+	Count int
+	PatentFileWrapperDataBag []patentFileWrapperDataBag
+	RequestIdentifier string
+	DocumentBag []document
+}
+
+type patentFileWrapperDataBag struct {
+	ApplicationNumberText string
+	PgpubDocumentMetaData pgpubDocumentMetadata
+	ApplicationMetaData applicationMetaData
+	CorrespondenceAddressBag []correspondenceAddress
+}
+
+type pgpubDocumentMetadata struct {
+	FileCreateDateTime string
+	FileLocationURI string
+	ProductIdentifier string
+}
+
+type applicationMetaData struct {
+	ApplicantBag []applicant
+	ApplicationStatusCode int
+	ApplicationStatusDescriptionText string
+	CpcClassificationBag []string
+	EarliestPublicationDate string
+	FilingDate string
+	FirstApplicantName string
+	FirstInventorName string
+	InventionTitle string
+}
+
+type applicant struct {
+	ApplicantNameText string 
+	CorrespondenceAddressBag []correspondenceAddress
+}
+
+type document struct {
+	ApplicationNumberText string
+	DirectionCategory string
+	DocumentCodeDescriptionText string
+	DocumentIdentifier string
+	DownloadOptionBag []downloadOption
+	OfficialDate string
+}
+
+type correspondenceAddress struct {
+	CityName string
+	CountryCode string
+	CountryName string
+	NameLineOneText string
+	PostalAddressCategory string
+}
+
+type downloadOption struct {
+	DownloadUrl string
+	MimeTypeIdentifier string
+	PageTotalQuantity int
+}
+
+func init() {
 	err := godotenv.Load()
 	if err != nil {
 		log.Fatalf("error loading .env file: %v", err)
 	}
 
-	apiKeyUspto := os.Getenv("USPTO_API_KEY")
+	apiKeyUspto = os.Getenv("USPTO_API_KEY")
 	if apiKeyUspto == "" {
 		log.Fatal("USPTO_API_KEY is not set")
 	}
+}
 
-	// Produce a json file of base USPTO endpoint for creating struct
-	testApplicationNumber := "18713389"
-	testPatentUrl := getUsptoEndpoint(testApplicationNumber, "base")
-	testPatentResponse, err := requestUspto(apiKeyUspto, testPatentUrl)
-	if err != nil {
-		log.Fatalf("error requesting patent: %v", err)
-	}
-	testPatentJsonOut, err := getFormattedJson(testPatentResponse)
+func main() {
 
-	pathPatent := "./patent_response"
-	err = os.WriteFile(pathPatent, testPatentJsonOut, 0644)
+}
+
+func RequestPatent(applicationNumber string) (response, error) {
+	var data response
+	var err error 
 	
+	url := getUsptoEndpoint(applicationNumber, "base")
+	resp, err := requestUspto(apiKeyUspto, url)
 	if err != nil {
-		log.Fatalf("error writing patent to file: %v", err)
+		return data, err
 	}
+	data, err = responseToStruct(resp)
 
-	// Produce a json file of documents request for creating struct
-	testDocumentUrl := getUsptoEndpoint(testApplicationNumber, "documents")
-	testDocumentResponse, err := requestUspto(apiKeyUspto, testDocumentUrl)
-	testDocumentJsonOut, err := getFormattedJson(testDocumentResponse)
-	if err != nil {
-		log.Fatalf("error requesting patent: %v", err)
+	if data.PatentFileWrapperDataBag[0].ApplicationNumberText != applicationNumber {
+		err = errIncorrectPatentReturned
 	}
+	return data, err
+}
 
-	pathDocument := "./document_response"
-	err = os.WriteFile(pathDocument, testDocumentJsonOut, 0644)
-	
+func RequestDocumentEndpoint(applicationNumber string) (response, error) {
+	var data response
+	var err error 
+
+	url := getUsptoEndpoint(applicationNumber, "documents")
+	resp, err := requestUspto(apiKeyUspto, url)
 	if err != nil {
-		log.Fatalf("error writing document to file: %v", err)
+		return data, err
 	}
-
-	// Produce a json file of associated documents request for creating struct
-	testAssociatedUrl := getUsptoEndpoint(testApplicationNumber, "associated")
-	testAssociatedResponse, err := requestUspto(apiKeyUspto, testAssociatedUrl)
-	testAssociatedJsonOut, err := getFormattedJson(testAssociatedResponse)
-	if err != nil {
-		log.Fatalf("error requesting patent: %v", err)
+	data, err = responseToStruct(resp)
+	if data.DocumentBag[0].ApplicationNumberText != applicationNumber {
+		err = errIncorrectPatentReturned
 	}
+	return data, err
+}
 
-	pathAssociated := "./associated_response"
-	err = os.WriteFile(pathAssociated, testAssociatedJsonOut, 0644)
-	
+func RequestAssociatedDocumentEndpoint(applicationNumber string) ([]byte, error) {
+	var initialResponseData response
+	var err error 
+
+	url := getUsptoEndpoint(applicationNumber, "associated")
+	resp, err := requestUspto(apiKeyUspto, url)
 	if err != nil {
-		log.Fatalf("error writing associated documents to file: %v", err)
+		return resp, err
 	}
-
-	var initialResponseAssociated response
-	
-	err = json.Unmarshal(testAssociatedResponse, &initialResponseAssociated)
+	err = json.Unmarshal(resp, &initialResponseData)
 
 	if err != nil {
-		log.Fatalf("error unmarshaling associated documents initial request to struct: %v", err)
+		return resp, err
 	}
 
 	// Submit second request using the file location URI returned by the first request
-	if len(initialResponseAssociated.PatentFileWrapperDataBag) != 1 {
-		log.Fatalf("length of response for PatentFileWrapperDataBag has length other than 1")
-	}
-	testAssociatedUrl = initialResponseAssociated.PatentFileWrapperDataBag[0].PgpubDocumentMetaData.FileLocationURI
-	fmt.Printf("Retrieved Url is %v", testAssociatedUrl)
-	testAssociatedResponse, err = requestUspto(apiKeyUspto, testAssociatedUrl)
-	err = os.WriteFile(pathAssociated, testAssociatedResponse, 0644)
-
-	if err != nil {
-		log.Fatalf("error with second request for associated documents: %v", err)
+	if len(initialResponseData.PatentFileWrapperDataBag) != 1 {
+		err = errors.New("Response returned from initial request with length other than 1: Behavior Undefined")
+		return resp, err
 	}
 
-	// Produce a file demonstrating the sequence endpoint response
-	testSequenceUrl := getDownloadUsptoEndpoint(testApplicationNumber, "LWKZH8YHREENX12.pdf")
-	testSequenceFileResponse, err := requestUspto(apiKeyUspto, testSequenceUrl)
+	url = initialResponseData.PatentFileWrapperDataBag[0].PgpubDocumentMetaData.FileLocationURI
 
-	if err != nil {
-		log.Fatalf("error requesting sequence doc: %v", err)
-	}
-
-	pathSequenceInitial := "./sequence_response_initial.pdf"
-	err = os.WriteFile(pathSequenceInitial, testSequenceFileResponse, 0644)
-	
-	if err != nil {
-		log.Fatalf("error writing document to file: %v", err)
-	}
+	resp, err = requestUspto(apiKeyUspto, url)
+	return resp, err
 }
 
 func requestUspto(apiKeyUspto string, endpoint string) ([]byte, error) {
@@ -145,15 +177,20 @@ func requestUspto(apiKeyUspto string, endpoint string) ([]byte, error) {
 		return bodyBytes, err
 	}
 
-	defer resp.Body.Close()
+	defer func() {
+		err := resp.Body.Close()
+		if err != nil {
+			fmt.Printf("Error closing response body: %v", err)
+		}
+	}()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		fmt.Printf("Received status code of: %v\n", resp.StatusCode)
+		err = errUnsuccessfulStatusCode
 		return bodyBytes, err
 	}
 	
 	bodyBytes, err = io.ReadAll(resp.Body)
-
 	return bodyBytes, err
 }
 
@@ -186,5 +223,11 @@ func getFormattedJson(bodyBytes []byte) ([]byte, error) {
 
 	data, err = json.MarshalIndent(mapData, "", "	")
 	return data, err
+}
+
+func responseToStruct(resp []byte) (response, error) {
+	var responseStruct response
+	err := json.Unmarshal(resp, &responseStruct)	
+	return responseStruct, err
 }
 
