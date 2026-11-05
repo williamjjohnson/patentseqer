@@ -18,6 +18,8 @@ func TestPatentRequest(t *testing.T) {
 		assertInt(t, got_int, want_int)
 		_, err = RequestPatent("1234123412341234")
 		assertError(t, err)
+		_, err = RequestPatent("0000000000")
+		assertError(t, err)
 	})
 
 	t.Run("Test document request for USPTO", func(t *testing.T) {

@@ -20,6 +20,7 @@ const (
 var (
 	errUnsuccessfulStatusCode = errors.New("Response returned with unsuccessful status code")
 	errIncorrectPatentReturned = errors.New("Api returned a patent with application number not matching the request")
+	errEmptyResponseBag = errors.New("Response returned with empty bag")
 	apiKeyUspto string
 )
 
@@ -112,6 +113,11 @@ func RequestPatent(applicationNumber string) (response, error) {
 	}
 	data, err = responseToStruct(resp)
 
+	if len(data.PatentFileWrapperDataBag) == 0 {
+		err = errEmptyResponseBag
+		return data, err
+	}
+
 	if data.PatentFileWrapperDataBag[0].ApplicationNumberText != applicationNumber {
 		err = errIncorrectPatentReturned
 	}
@@ -128,6 +134,10 @@ func RequestDocumentEndpoint(applicationNumber string) (response, error) {
 		return data, err
 	}
 	data, err = responseToStruct(resp)
+	if len(data.DocumentBag) == 0 {
+		err = errEmptyResponseBag
+		return data, err
+	}
 	if data.DocumentBag[0].ApplicationNumberText != applicationNumber {
 		err = errIncorrectPatentReturned
 	}
@@ -150,6 +160,11 @@ func RequestAssociatedDocumentEndpoint(applicationNumber string) ([]byte, error)
 	}
 
 	// Submit second request using the file location URI returned by the first request
+	if len(initialResponseData.PatentFileWrapperDataBag) == 0 {
+		err = errEmptyResponseBag
+		return resp, err
+	}
+
 	if len(initialResponseData.PatentFileWrapperDataBag) != 1 {
 		err = errors.New("Response returned from initial request with length other than 1: Behavior Undefined")
 		return resp, err
@@ -187,9 +202,8 @@ func requestUspto(apiKeyUspto string, endpoint string) ([]byte, error) {
 	}()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		fmt.Printf("Received status code of: %v\n", resp.StatusCode)
 		err = errUnsuccessfulStatusCode
-		return bodyBytes, err
+		return bodyBytes, fmt.Errorf("%w: %d", err, resp.StatusCode)
 	}
 	
 	bodyBytes, err = io.ReadAll(resp.Body)
