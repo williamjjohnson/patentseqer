@@ -13,6 +13,8 @@ jobs:
 
   build:
     runs-on: ubuntu-26.04
+    env:
+      USPTO_API_KEY: ${{ secrets.USPTO_API_KEY }}
     steps:
     - uses: actions/checkout@v6
 

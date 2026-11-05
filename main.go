@@ -86,7 +86,9 @@ type downloadOption struct {
 func init() {
 	err := godotenv.Load()
 	if err != nil {
-		log.Fatalf("error loading .env file: %v", err)
+		if os.Getenv("CI") == "" {
+			log.Printf("warning: could not load .env file: %v", err)
+		}
 	}
 
 	apiKeyUspto = os.Getenv("USPTO_API_KEY")
