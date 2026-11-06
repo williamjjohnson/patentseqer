@@ -2,86 +2,87 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
-	"errors"
 
 	"github.com/joho/godotenv"
 )
 
 const (
-	baseUrlUspto = "https://api.uspto.gov/api/v1/patent/applications/"
+	baseUrlUspto     = "https://api.uspto.gov/api/v1/patent/applications/"
 	downloadUrlUspto = "https://api.uspto.gov/api/v1/download/applications/"
 )
 
 var (
-	errUnsuccessfulStatusCode = errors.New("Response returned with unsuccessful status code")
+	errUnsuccessfulStatusCode  = errors.New("Response returned with unsuccessful status code")
 	errIncorrectPatentReturned = errors.New("Api returned a patent with application number not matching the request")
-	errEmptyResponseBag = errors.New("Response returned with empty bag")
-	apiKeyUspto string
+	errEmptyResponseBag        = errors.New("Response returned with empty bag")
+	errUnexpectedLength        = errors.New("Response returned from initial request with length other than 1: Behavior Undefined")
+	apiKeyUspto                string
 )
 
 type response struct {
-	Count int
+	Count                    int
 	PatentFileWrapperDataBag []patentFileWrapperDataBag
-	RequestIdentifier string
-	DocumentBag []document
+	RequestIdentifier        string
+	DocumentBag              []document
 }
 
 type patentFileWrapperDataBag struct {
-	ApplicationNumberText string
-	PgpubDocumentMetaData pgpubDocumentMetadata
-	ApplicationMetaData applicationMetaData
+	ApplicationNumberText    string
+	PgpubDocumentMetaData    pgpubDocumentMetadata
+	ApplicationMetaData      applicationMetaData
 	CorrespondenceAddressBag []correspondenceAddress
 }
 
 type pgpubDocumentMetadata struct {
 	FileCreateDateTime string
-	FileLocationURI string
-	ProductIdentifier string
+	FileLocationURI    string
+	ProductIdentifier  string
 }
 
 type applicationMetaData struct {
-	ApplicantBag []applicant
-	ApplicationStatusCode int
+	ApplicantBag                     []applicant
+	ApplicationStatusCode            int
 	ApplicationStatusDescriptionText string
-	CpcClassificationBag []string
-	EarliestPublicationDate string
-	FilingDate string
-	FirstApplicantName string
-	FirstInventorName string
-	InventionTitle string
+	CpcClassificationBag             []string
+	EarliestPublicationDate          string
+	FilingDate                       string
+	FirstApplicantName               string
+	FirstInventorName                string
+	InventionTitle                   string
 }
 
 type applicant struct {
-	ApplicantNameText string 
+	ApplicantNameText        string
 	CorrespondenceAddressBag []correspondenceAddress
 }
 
 type document struct {
-	ApplicationNumberText string
-	DirectionCategory string
+	ApplicationNumberText       string
+	DirectionCategory           string
 	DocumentCodeDescriptionText string
-	DocumentIdentifier string
-	DownloadOptionBag []downloadOption
-	OfficialDate string
+	DocumentIdentifier          string
+	DownloadOptionBag           []downloadOption
+	OfficialDate                string
 }
 
 type correspondenceAddress struct {
-	CityName string
-	CountryCode string
-	CountryName string
-	NameLineOneText string
+	CityName              string
+	CountryCode           string
+	CountryName           string
+	NameLineOneText       string
 	PostalAddressCategory string
 }
 
 type downloadOption struct {
-	DownloadUrl string
+	DownloadUrl        string
 	MimeTypeIdentifier string
-	PageTotalQuantity int
+	PageTotalQuantity  int
 }
 
 func init() {
@@ -99,81 +100,109 @@ func init() {
 }
 
 func main() {
-
 }
 
 func RequestPatent(applicationNumber string) (response, error) {
-	var data response
-	var err error 
-	
+	var responseStruct response
+	resp, err := fetchPatent(applicationNumber)
+	if err != nil {
+		return responseStruct, err
+	}
+
+	responseStruct, err = responseToStruct(resp)
+	if err != nil {
+		return responseStruct, err
+	}
+
+	err = validatePatentResponse(responseStruct, applicationNumber)
+	return responseStruct, err
+}
+
+func RequestDocuments(applicationNumber string) (response, error) {
+	var responseStruct response
+	resp, err := fetchDocumentEndpoint(applicationNumber)
+	if err != nil {
+		return responseStruct, err
+	}
+
+	responseStruct, err = responseToStruct(resp)
+	if err != nil {
+		return responseStruct, err
+	}
+
+	err = validateDocumentsResponse(responseStruct, applicationNumber)
+	return responseStruct, err
+}
+
+func fetchPatent(applicationNumber string) ([]byte, error) {
 	url := getUsptoEndpoint(applicationNumber, "base")
 	resp, err := requestUspto(apiKeyUspto, url)
-	if err != nil {
-		return data, err
-	}
-	data, err = responseToStruct(resp)
-
-	if len(data.PatentFileWrapperDataBag) == 0 {
-		err = errEmptyResponseBag
-		return data, err
-	}
-
-	if data.PatentFileWrapperDataBag[0].ApplicationNumberText != applicationNumber {
-		err = errIncorrectPatentReturned
-	}
-	return data, err
+	return resp, err
 }
 
-func RequestDocumentEndpoint(applicationNumber string) (response, error) {
-	var data response
-	var err error 
-
+func fetchDocumentEndpoint(applicationNumber string) ([]byte, error) {
 	url := getUsptoEndpoint(applicationNumber, "documents")
 	resp, err := requestUspto(apiKeyUspto, url)
-	if err != nil {
-		return data, err
-	}
-	data, err = responseToStruct(resp)
-	if len(data.DocumentBag) == 0 {
-		err = errEmptyResponseBag
-		return data, err
-	}
-	if data.DocumentBag[0].ApplicationNumberText != applicationNumber {
-		err = errIncorrectPatentReturned
-	}
-	return data, err
+	return resp, err
 }
 
-func RequestAssociatedDocumentEndpoint(applicationNumber string) ([]byte, error) {
-	var initialResponseData response
-	var err error 
+func fetchAssociatedDocumentEndpoint(applicationNumber string) ([]byte, error) {
+	var err error
 
 	url := getUsptoEndpoint(applicationNumber, "associated")
 	resp, err := requestUspto(apiKeyUspto, url)
 	if err != nil {
 		return resp, err
 	}
-	err = json.Unmarshal(resp, &initialResponseData)
 
+	initialResponseData, err := responseToStruct(resp)
+	if err != nil {
+		return resp, err
+	}
+
+	err = validateInitialResponse(initialResponseData, applicationNumber)
 	if err != nil {
 		return resp, err
 	}
 
 	// Submit second request using the file location URI returned by the first request
-	if len(initialResponseData.PatentFileWrapperDataBag) == 0 {
-		err = errEmptyResponseBag
-		return resp, err
-	}
-
-	if len(initialResponseData.PatentFileWrapperDataBag) != 1 {
-		err = errors.New("Response returned from initial request with length other than 1: Behavior Undefined")
-		return resp, err
-	}
-
 	url = initialResponseData.PatentFileWrapperDataBag[0].PgpubDocumentMetaData.FileLocationURI
 
 	resp, err = requestUspto(apiKeyUspto, url)
 	return resp, err
+}
+
+func validatePatentResponse(resp response, applicationNumber string) error {
+	if len(resp.PatentFileWrapperDataBag) == 0 {
+		return fmt.Errorf("Error while validating patent response: %w", errEmptyResponseBag)
+	}
+	if resp.PatentFileWrapperDataBag[0].ApplicationNumberText != applicationNumber {
+		return fmt.Errorf("Error while validating patent response: %w", errIncorrectPatentReturned)
+	}
+	return nil
+}
+
+func validateDocumentsResponse(resp response, applicationNumber string) error {
+	if len(resp.DocumentBag) == 0 {
+		return fmt.Errorf("Error while validating documents response: %w", errEmptyResponseBag)
+	}
+	if resp.DocumentBag[0].ApplicationNumberText != applicationNumber {
+		return fmt.Errorf("Error while validating documents response: %w", errIncorrectPatentReturned)
+	}
+	return nil
+}
+
+func validateInitialResponse(resp response, applicationNumber string) error {
+	if len(resp.PatentFileWrapperDataBag) == 0 {
+		return fmt.Errorf("Error while validating initial response: %w", errEmptyResponseBag)
+	}
+	if len(resp.PatentFileWrapperDataBag) != 1 {
+		return fmt.Errorf("Error while validating initial response: %w", errUnexpectedLength)
+	}
+	if resp.PatentFileWrapperDataBag[0].ApplicationNumberText != applicationNumber {
+		return fmt.Errorf("Error while validating initial response: %w", errIncorrectPatentReturned)
+	}
+	return nil
 }
 
 func requestUspto(apiKeyUspto string, endpoint string) ([]byte, error) {
@@ -205,7 +234,7 @@ func requestUspto(apiKeyUspto string, endpoint string) ([]byte, error) {
 		err = errUnsuccessfulStatusCode
 		return bodyBytes, fmt.Errorf("%w: %d", err, resp.StatusCode)
 	}
-	
+
 	bodyBytes, err = io.ReadAll(resp.Body)
 	return bodyBytes, err
 }
@@ -213,7 +242,7 @@ func requestUspto(apiKeyUspto string, endpoint string) ([]byte, error) {
 func getUsptoEndpoint(applicationNumber, requestType string) string {
 	var endpoint string
 	switch requestType {
-	case "base": 
+	case "base":
 		endpoint = baseUrlUspto + applicationNumber
 	case "documents":
 		endpoint = baseUrlUspto + applicationNumber + "/documents"
@@ -243,7 +272,6 @@ func getFormattedJson(bodyBytes []byte) ([]byte, error) {
 
 func responseToStruct(resp []byte) (response, error) {
 	var responseStruct response
-	err := json.Unmarshal(resp, &responseStruct)	
+	err := json.Unmarshal(resp, &responseStruct)
 	return responseStruct, err
 }
-
