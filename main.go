@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,7 +23,9 @@ var (
 	errIncorrectPatentReturned = errors.New("Api returned a patent with application number not matching the request")
 	errEmptyResponseBag        = errors.New("Response returned with empty bag")
 	errUnexpectedLength        = errors.New("Response returned from initial request with length other than 1: Behavior Undefined")
+	errZeroLengthBuffer        = errors.New("Buffer created with length of zero, indicating empty response")
 	apiKeyUspto                string
+	outDirectory               = ".out"
 )
 
 type response struct {
@@ -100,6 +103,7 @@ func init() {
 }
 
 func main() {
+
 }
 
 func RequestPatent(applicationNumber string) (response, error) {
@@ -257,6 +261,16 @@ func getDownloadUsptoEndpoint(applicationNumber, documentIdentifier string) stri
 	return downloadEndpoint
 }
 
+func responseToJson(bodyBytes []byte, w io.Writer) error {
+	formattedData, err := getFormattedJson(bodyBytes)
+	if err != nil {
+		return err
+	}
+
+	_, err = w.Write(formattedData)
+	return err
+}
+
 func getFormattedJson(bodyBytes []byte) ([]byte, error) {
 	var data []byte
 	var mapData map[string]any
@@ -268,6 +282,17 @@ func getFormattedJson(bodyBytes []byte) ([]byte, error) {
 
 	data, err = json.MarshalIndent(mapData, "", "	")
 	return data, err
+}
+
+func responseToFile(bodyBytes []byte, w io.Writer) error {
+	var buf bytes.Buffer
+	var err error
+	l, _ := buf.Write(bodyBytes)
+	buf.WriteTo(w)
+	if l < 1 {
+		err = errZeroLengthBuffer
+	}
+	return err
 }
 
 func responseToStruct(resp []byte) (response, error) {
